@@ -2,6 +2,7 @@ from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 
 CLEAR_DIALOG_BUTTON = "🧹 Очистить диалог"
+PROMPTS_BUTTON = "📚 Промпты"
 SELECT_MODEL_BUTTON = "🤖 Выбрать модель"
 SETTINGS_BUTTON = "⚙️ Настройки"
 TEMPERATURE_BUTTON = "🌡 Температура"
@@ -16,9 +17,10 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=CLEAR_DIALOG_BUTTON)],
             [
+                KeyboardButton(text=PROMPTS_BUTTON),
                 KeyboardButton(text=SELECT_MODEL_BUTTON),
-                KeyboardButton(text=SETTINGS_BUTTON),
             ],
+            [KeyboardButton(text=SETTINGS_BUTTON)],
             [KeyboardButton(text=HELP_BUTTON)],
         ],
         resize_keyboard=True,

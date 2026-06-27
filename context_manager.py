@@ -11,11 +11,15 @@ from llm_config import (
     get_default_model_display_name,
     get_default_temperature,
     get_max_history_messages,
-    get_system_prompt,
 )
+from prompt_library import get_available_prompts, get_default_prompt_id, get_prompt_by_id
 
 
 logger = logging.getLogger(__name__)
+
+
+def get_available_prompt_ids() -> set[str]:
+    return set(get_available_prompts())
 
 
 class ContextManager:
@@ -66,7 +70,25 @@ class ContextManager:
 
     def clear_context(self, user_id: int | str) -> None:
         user_data = self._get_user_data(user_id)
-        user_data["messages"] = [self._system_message()]
+        user_data["messages"] = [self._system_message_for(user_data)]
+        self.save()
+
+    def get_user_prompt_id(self, user_id: int | str) -> str:
+        user_data = self._get_user_data(user_id)
+        return self._resolve_prompt_id(user_data)
+
+    def get_user_prompt_title(self, user_id: int | str) -> str:
+        prompt_id = self.get_user_prompt_id(user_id)
+        prompt = get_prompt_by_id(prompt_id)
+        return prompt.title if prompt else prompt_id
+
+    def set_user_prompt(self, user_id: int | str, prompt_id: str) -> None:
+        if prompt_id not in get_available_prompt_ids():
+            raise ValueError(f"Unknown prompt: {prompt_id}")
+
+        user_data = self._get_user_data(user_id)
+        user_data["prompt_id"] = prompt_id
+        user_data["messages"] = [self._system_message_for(user_data)]
         self.save()
 
     def get_user_model(self, user_id: int | str) -> str:
@@ -117,15 +139,17 @@ class ContextManager:
     def _add_message(self, user_id: int | str, role: str, text: str) -> None:
         user_data = self._get_user_data(user_id)
         user_data["messages"].append({"role": role, "content": text})
-        self._trim_history(user_data)
+        self._trim_history(user_id, user_data)
         self.save()
 
     def _get_user_data(self, user_id: int | str) -> dict[str, Any]:
         user_key = str(user_id)
         if user_key not in self.data or not isinstance(self.data[user_key], dict):
-            self.data[user_key] = self._new_user_data()
+            user_data = self._new_user_data()
+            user_data["messages"] = [self._system_message_for(user_data)]
+            self.data[user_key] = user_data
             self.save()
-            return self.data[user_key]
+            return user_data
 
         user_data = self.data[user_key]
         if user_data.get("model") not in get_available_models():
@@ -134,13 +158,16 @@ class ContextManager:
         user_data["temperature"] = self._normalize_temperature(user_data.get("temperature"))
         user_data["max_tokens"] = self._normalize_max_tokens(user_data.get("max_tokens"))
 
+        if user_data.get("prompt_id") not in get_available_prompt_ids():
+            user_data["prompt_id"] = get_default_prompt_id()
+
         messages = user_data.get("messages")
         if not isinstance(messages, list):
-            user_data["messages"] = [self._system_message()]
+            user_data["messages"] = [self._system_message_for(user_data)]
         else:
-            user_data["messages"] = self._normalize_messages(messages)
+            user_data["messages"] = self._normalize_messages(user_data, messages)
 
-        self._trim_history(user_data)
+        self._trim_history(user_key, user_data)
         return user_data
 
     def _new_user_data(self) -> dict[str, Any]:
@@ -148,7 +175,8 @@ class ContextManager:
             "model": get_default_model_display_name(),
             "temperature": get_default_temperature(),
             "max_tokens": get_default_max_tokens(),
-            "messages": [self._system_message()],
+            "prompt_id": get_default_prompt_id(),
+            "messages": [],
         }
 
     def _normalize_temperature(self, value: Any) -> float:
@@ -172,10 +200,22 @@ class ContextManager:
             return max_tokens
         return get_default_max_tokens()
 
-    def _system_message(self) -> dict[str, str]:
-        return {"role": "system", "content": get_system_prompt()}
+    def _resolve_prompt_id(self, user_data: dict[str, Any]) -> str:
+        prompt_id = user_data.get("prompt_id")
+        if prompt_id in get_available_prompt_ids():
+            return prompt_id
+        return get_default_prompt_id()
 
-    def _normalize_messages(self, messages: list[Any]) -> list[dict[str, str]]:
+    def _system_message_for(self, user_data: dict[str, Any]) -> dict[str, str]:
+        prompt = get_prompt_by_id(self._resolve_prompt_id(user_data))
+        content = prompt.to_system_prompt() if prompt else ""
+        return {"role": "system", "content": content}
+
+    def _normalize_messages(
+        self,
+        user_data: dict[str, Any],
+        messages: list[Any],
+    ) -> list[dict[str, str]]:
         normalized_messages: list[dict[str, str]] = []
         system_added = False
 
@@ -191,18 +231,22 @@ class ContextManager:
             if role == "system":
                 if system_added:
                     continue
-                normalized_messages.insert(0, self._system_message())
+                normalized_messages.insert(0, self._system_message_for(user_data))
                 system_added = True
             else:
                 normalized_messages.append({"role": role, "content": content})
 
         if not system_added:
-            normalized_messages.insert(0, self._system_message())
+            normalized_messages.insert(0, self._system_message_for(user_data))
 
         return normalized_messages
 
-    def _trim_history(self, user_data: dict[str, Any]) -> None:
+    def _trim_history(self, user_id: int | str, user_data: dict[str, Any]) -> None:
         messages = user_data["messages"]
-        system_message = messages[0] if messages and messages[0]["role"] == "system" else self._system_message()
+        system_message = (
+            messages[0]
+            if messages and messages[0]["role"] == "system"
+            else self._system_message_for(user_data)
+        )
         regular_messages = [message for message in messages if message["role"] != "system"]
         user_data["messages"] = [system_message] + regular_messages[-get_max_history_messages():]

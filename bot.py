@@ -14,6 +14,7 @@ from keyboards import (
     CLEAR_DIALOG_BUTTON,
     HELP_BUTTON,
     MAX_TOKENS_BUTTON,
+    PROMPTS_BUTTON,
     SELECT_MODEL_BUTTON,
     SETTINGS_BACK_BUTTON,
     SETTINGS_BUTTON,
@@ -30,6 +31,7 @@ from llm_config import (
     get_available_models,
     get_available_temperatures,
 )
+from prompt_library import get_prompt_id_by_title, get_prompt_titles
 
 
 logging.basicConfig(
@@ -44,6 +46,7 @@ api_client = ApiClient(config)
 available_models = get_available_models()
 available_temperatures = get_available_temperatures()
 available_max_tokens = get_available_max_tokens()
+available_prompt_titles = get_prompt_titles()
 
 
 def create_bot() -> Bot:
@@ -56,9 +59,11 @@ def create_bot() -> Bot:
 
 def user_settings_text(user_id: int) -> str:
     model_name = context_manager.get_user_model(user_id)
+    prompt_title = context_manager.get_user_prompt_title(user_id)
     temperature = format_temperature(context_manager.get_user_temperature(user_id))
     max_tokens = format_max_tokens(context_manager.get_user_max_tokens(user_id))
     return (
+        f"Роль: {prompt_title}\n"
         f"Модель: {model_name}\n"
         f"Температура: {temperature}\n"
         f"Max tokens: {max_tokens}"
@@ -85,7 +90,7 @@ async def help_message(message: Message) -> None:
         "Я сохраняю историю вашего диалога и отправляю ее в OpenAI API.\n\n"
         f"{user_settings_text(message.from_user.id)}\n\n"
         "Кнопка очистки удаляет только историю сообщений. "
-        "Модель и настройки генерации сохраняются.",
+        "Модель, роль и настройки генерации сохраняются.",
         reply_markup=main_keyboard(),
     )
 
@@ -94,7 +99,34 @@ async def help_message(message: Message) -> None:
 async def clear_dialog(message: Message) -> None:
     context_manager.clear_context(message.from_user.id)
     await message.answer(
-        "Диалог очищен. Модель и настройки генерации сохранены.",
+        "Диалог очищен. Роль, модель и настройки генерации сохранены.",
+        reply_markup=main_keyboard(),
+    )
+
+
+@dp.message(F.text == PROMPTS_BUTTON)
+async def choose_prompt(message: Message) -> None:
+    await message.answer(
+        f"Текущая роль: {context_manager.get_user_prompt_title(message.from_user.id)}\n\n"
+        "Выберите роль из библиотеки промптов:",
+        reply_markup=option_keyboard(available_prompt_titles),
+    )
+
+
+@dp.message(F.text.in_(available_prompt_titles))
+async def set_prompt(message: Message) -> None:
+    prompt_id = get_prompt_id_by_title(message.text)
+    if prompt_id is None:
+        await message.answer(
+            "Не удалось найти выбранный промпт.",
+            reply_markup=main_keyboard(),
+        )
+        return
+
+    context_manager.set_user_prompt(message.from_user.id, prompt_id)
+    await message.answer(
+        f"Роль выбрана: {message.text}\n"
+        "История диалога сброшена. Напишите ваш запрос.",
         reply_markup=main_keyboard(),
     )
 
